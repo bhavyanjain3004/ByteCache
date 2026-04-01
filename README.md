@@ -37,8 +37,12 @@ telnet 98.93.91.108 6379
 nc 98.93.91.108 6379
 
 # Type commands directly, e.g.:
-SET cloud_test 100
-GET cloud_test
+SET username bhavya
+GET username
+DEL username
+EXPIRE username 60
+SUBSCRIBE my_channel
+PUBLISH my_channel hello
 ```
 
 **Option B: Use the integrated Java CLI Client ☕**
