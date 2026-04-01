@@ -1,4 +1,4 @@
-# 🚀 ByteCache (MiniRedis)
+# 🚀 ByteCache 
 
 A high-performance, in-memory key-value database engine built entirely from scratch in **Core Java 17** with *zero external logic dependencies*. ByteCache implements the core architecture that makes real networking databases like Redis fast and safe: thread-safe concurrent reads, active TTL expiration, and $O(1)$ constant-time caching mechanics.
 
@@ -33,7 +33,7 @@ Raw, unencrypted caching just like the real protocol:
 # Windows / Linux:
 telnet 98.93.91.108 6379 
 
-# macOS (which removed telnet):
+# macOS:
 nc 98.93.91.108 6379
 
 # Type commands directly, e.g.:
