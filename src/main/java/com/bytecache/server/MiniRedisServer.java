@@ -4,6 +4,7 @@ import com.bytecache.cache.Cache;
 import com.bytecache.cache.EvictionPolicy;
 import com.bytecache.cache.LFUCache;
 import com.bytecache.cache.LRUCache;
+import com.bytecache.cluster.CacheCluster;
 import com.bytecache.pubsub.PubSubEngine;
 
 import java.io.IOException;
@@ -19,8 +20,23 @@ public class MiniRedisServer {
     private final ExecutorService clientPool;
 
     public MiniRedisServer(int port, EvictionPolicy policy, int capacity) {
+        this(port, policy, capacity, 1);
+    }
+
+    /**
+     * Multi-node constructor. When {@code numNodes} > 1, all cache operations
+     * are routed through a {@link CacheCluster} with consistent hashing.
+     * Each shard gets {@code capacity / numNodes} entries.
+     *
+     * @param numNodes number of independent cache shards (1 = single-node mode)
+     */
+    public MiniRedisServer(int port, EvictionPolicy policy, int capacity, int numNodes) {
         this.port = port;
-        if (policy == EvictionPolicy.LFU) {
+        if (numNodes > 1) {
+            int capacityPerShard = Math.max(1, capacity / numNodes);
+            this.cache = new CacheCluster<>(numNodes, capacityPerShard);
+            System.out.println("[Cluster] " + numNodes + " nodes, " + capacityPerShard + " capacity/shard");
+        } else if (policy == EvictionPolicy.LFU) {
             this.cache = new LFUCache<>(capacity);
         } else {
             this.cache = new LRUCache<>(capacity);
@@ -46,6 +62,7 @@ public class MiniRedisServer {
         int port = 6379;
         EvictionPolicy policy = EvictionPolicy.LRU;
         int capacity = 1000;
+        int nodes = 1; // default: single-node mode
 
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("--port") && i + 1 < args.length) {
@@ -54,10 +71,12 @@ public class MiniRedisServer {
                 policy = EvictionPolicy.valueOf(args[++i].toUpperCase());
             } else if (args[i].equals("--capacity") && i + 1 < args.length) {
                 capacity = Integer.parseInt(args[++i]);
+            } else if (args[i].equals("--nodes") && i + 1 < args.length) {
+                nodes = Integer.parseInt(args[++i]);
             }
         }
 
-        MiniRedisServer server = new MiniRedisServer(port, policy, capacity);
+        MiniRedisServer server = new MiniRedisServer(port, policy, capacity, nodes);
         server.start();
     }
 }

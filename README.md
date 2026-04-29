@@ -1,15 +1,16 @@
 # 🚀 ByteCache 
 
-A high-performance, in-memory key-value database engine built entirely from scratch in **Core Java 17** with *zero external logic dependencies*. ByteCache implements the core architecture that makes real networking databases like Redis fast and safe: thread-safe concurrent reads, active TTL expiration, and $O(1)$ constant-time caching mechanics.
+A high-performance, in-memory key-value database engine built entirely from scratch in **Core Java 17** with *zero external logic dependencies*. ByteCache implements the core architecture that makes real networking databases like Redis fast and safe: thread-safe concurrent reads, active TTL expiration, $O(1)$ constant-time caching mechanics, and a **consistent-hashing multi-node cluster** layer.
 
 ## 🌟 Key Features
 
 * **$O(1)$ LRU Eviction**: Unites a native `HashMap` with a custom-engineered `DoublyLinkedList`. As cache capacity is met, the least recently accessed node is severed natively from the tail in constant time without any list scanning.
 * **$O(\log n)$ LFU Eviction Mode**: An optional eviction mode that intelligently purges the least *frequently* accessed elements by leveraging a `PriorityQueue` (Min-Heap).
+* **Multi-Node Cluster (`CacheCluster`)**: A consistent-hashing router shards keys across N independent `LRUCache` nodes. Each shard owns its own `ReentrantReadWriteLock` — operations on different shards run fully in parallel. FNV-1a hash + 150 virtual nodes per shard ensure balanced distribution.
 * **Multi-Threaded Safety (`ReentrantReadWriteLock`)**: Read-heavy cache workloads inherently benefit from unblocked parallel reading while completely serializing modifying `SET/DEL` transactions to prevent race conditions.
 * **TTL Key Expiry**: Implements the identical dual-expiry strategy used by Redis: a native `ScheduledExecutorService` actively purges items concurrently at deadline, alongside lazy evaluations during lookup.
 * **Publish / Subscribe**: Employs a non-blocking `ConcurrentHashMap` mapping channels to subscriber sockets dynamically, allowing decoupled async message broadcasting via `ExecutorService`.
-* **Socket / Custom CLI Parsing**: Implements a native TCP `ServerSocket` instance mapping Redis commands (`SET`, `GET`, `DEL`, `EXPIRE`, `SUBSCRIBE`, `PUBLISH`) across a cached connection pool cleanly.
+* **Socket / Custom CLI Parsing**: Implements a native TCP `ServerSocket` instance mapping Redis commands (`SET`, `GET`, `DEL`, `EXPIRE`, `SETEX`, `SUBSCRIBE`, `PUBLISH`) across a cached connection pool cleanly.
 
 ---
 
@@ -21,6 +22,31 @@ Evaluated on a concurrent Quad-Threaded load containing 1,000,000 operations und
 | :--- | :--- | :--- | :--- |
 | **LRU Cache** | `DoublyLinkedList` | 457 ms | **~2,188,183 ops/sec** |
 | **LFU Cache** | `Min-Heap` | 935 ms | **~1,069,518 ops/sec** |
+
+---
+
+## 🏗️ Architecture
+
+```
+                    ┌─────────────────────────────────┐
+  TCP Clients ───▶  │       MiniRedisServer (:6379)    │
+  (telnet / nc)     │   newCachedThreadPool()          │
+                    └──────────┬──────────────────────┘
+                               │  one ClientHandler thread per client
+                               ▼
+              ┌────────────────────────────────┐
+              │   Cache<String, String>         │
+              │  (interface — swappable)        │
+              └──────┬────────────────┬────────┘
+                     │                │
+            ┌────────▼──────┐ ┌───────▼───────────────────┐
+            │  LRUCache     │ │  CacheCluster (--nodes N)  │
+            │  LFUCache     │ │  consistent hash ring      │
+            └───────────────┘ │  ┌──────┬──────┬──────┐   │
+                              │  │Shard0│Shard1│ShardN│   │
+                              │  └──────┴──────┴──────┘   │
+                              └───────────────────────────┘
+```
 
 ---
 
@@ -64,14 +90,46 @@ mvn clean package -DskipTests
 ```
 
 ### 2. Start the Local Database Engine
-By default, the server spins up using LRU policy over port `:6379`.
+
+**Single-node mode (default — LRU, port 6379):**
 ```bash
 java -cp target/classes com.bytecache.server.MiniRedisServer
-# Optional Flags: --port 6379 --policy LFU --capacity 1000
+# Optional flags:
+# --port 6379 --policy LFU --capacity 1000
+```
+
+**Multi-node cluster mode (consistent hashing across N shards):**
+```bash
+java -cp target/classes com.bytecache.server.MiniRedisServer --nodes 4 --capacity 4000
+# Spins up 4 independent LRU shards (1000 entries each)
+# Keys are distributed via FNV-1a consistent hash ring
 ```
 
 ### 3. Alternatively, deploy locally with Docker 🐳
 ```bash
 docker build -t bytecache .
 docker run -d -p 6379:6379 bytecache
+
+# Multi-node mode via Docker:
+docker run -d -p 6379:6379 bytecache --nodes 4 --capacity 4000
 ```
+
+---
+
+## 🧪 Test Suite (JUnit 5)
+
+14 tests across 4 categories — `mvn test`:
+
+| Category | Tests | What's verified |
+| :--- | :--- | :--- |
+| **Eviction** | 2 | LRU and LFU order correctness |
+| **TTL** | 4 | Active eviction, lazy eviction on get, non-expiry, no-TTL |
+| **Concurrency** | 4 | 16-thread race stress, capacity invariant, TTL deadlock, delete+read |
+| **Multi-node** | 4 | Key distribution, deterministic routing, CRUD, concurrent cluster throughput |
+
+```bash
+mvn test
+# Tests run: 14, Failures: 0, Errors: 0
+```
+
+Concurrency tests use `CountDownLatch` as a **start gate** — all threads release simultaneously to maximise race condition exposure.
